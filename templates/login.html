@@ -3,153 +3,229 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Make Arjo Work</title>
+    <title>Make Arjo Work</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+            background: #fafafa;
+            color: #1d1d1f;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+            padding: 32px;
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .logo h1 {
+            font-size: 32px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+        }
+
+        .logo p {
+            font-size: 16px;
+            color: #6e6e73;
+            letter-spacing: -0.01em;
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 16px;
+            padding: 32px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 14px 16px;
+            font-size: 16px;
+            font-family: inherit;
+            background: #fafafa;
+            border: 1px solid rgba(0,0,0,0.12);
+            border-radius: 10px;
+            color: #1d1d1f;
+            outline: none;
+            transition: all 0.15s ease;
+        }
+
+        .form-group input::placeholder { color: #8e8e93; }
+        .form-group input:focus {
+            background: #fff;
+            border-color: #1d1d1f;
+        }
+
+        button {
+            width: 100%;
+            padding: 14px 24px;
+            font-size: 16px;
+            font-weight: 500;
+            font-family: inherit;
+            background: #1d1d1f;
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        button:hover { background: #000; }
+        button:active { transform: scale(0.98); }
+
+        .footer {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 13px;
+            color: #8e8e93;
+        }
+
+        .message {
+            padding: 14px 16px;
+            border-radius: 10px;
+            margin-bottom: 24px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .message.error {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+
+        .success-state {
+            text-align: center;
+            padding: 24px 0;
+        }
+
+        .success-state .icon {
+            width: 56px;
+            height: 56px;
+            margin: 0 auto 20px;
+            background: #f0fdf4;
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
         }
 
-        .login-container {
-            background: white;
-            padding: 2.5rem;
-            border-radius: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-            width: 100%;
-            max-width: 400px;
-            margin: 1rem;
+        .success-state .icon svg {
+            width: 28px;
+            height: 28px;
+            color: #22c55e;
         }
 
-        h1 {
-            font-size: 1.75rem;
-            color: #1a202c;
-            margin-bottom: 0.5rem;
-            text-align: center;
-        }
-
-        .subtitle {
-            color: #718096;
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-
-        label {
-            display: block;
-            color: #4a5568;
-            font-size: 0.875rem;
-            font-weight: 500;
-            margin-bottom: 0.5rem;
-        }
-
-        input[type="email"] {
-            width: 100%;
-            padding: 0.875rem 1rem;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 1rem;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-
-        input[type="email"]:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-
-        button {
-            width: 100%;
-            padding: 0.875rem 1rem;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
+        .success-state h2 {
+            font-size: 20px;
             font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
+            margin-bottom: 8px;
         }
 
-        button:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 10px 20px -10px rgba(102, 126, 234, 0.5);
+        .success-state p {
+            color: #6e6e73;
+            font-size: 15px;
+            line-height: 1.5;
         }
 
-        button:active {
-            transform: translateY(0);
-        }
-
-        .message {
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 1.5rem;
+        .cli-hint {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid rgba(0,0,0,0.06);
             text-align: center;
         }
 
-        .message.success {
-            background: #c6f6d5;
-            color: #276749;
+        .cli-hint p {
+            font-size: 13px;
+            color: #8e8e93;
+            margin-bottom: 8px;
         }
 
-        .message.error {
-            background: #fed7d7;
-            color: #c53030;
+        .cli-hint code {
+            font-family: 'SF Mono', Menlo, monospace;
+            font-size: 12px;
+            color: #6e6e73;
+            background: #f5f5f7;
+            padding: 6px 10px;
+            border-radius: 6px;
+            display: inline-block;
         }
 
-        .info {
-            margin-top: 1.5rem;
-            padding: 1rem;
-            background: #ebf8ff;
-            border-radius: 8px;
-            color: #2b6cb0;
-            font-size: 0.875rem;
-            text-align: center;
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
         }
+        .card { animation: fadeIn 0.3s ease; }
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <h1>Make Arjo Work</h1>
-        <p class="subtitle">The official task tracker</p>
-
-        {% if success %}
-        <div class="message success">
-            Check your email for a login link!
+    <div class="container">
+        <div class="logo">
+            <h1>Make Arjo Work</h1>
+            <p>Task accountability, simplified.</p>
         </div>
-        {% endif %}
 
-        {% if error %}
-        <div class="message error">
-            {{ error }}
-        </div>
-        {% endif %}
-
-        {% if not success %}
-        <form method="POST">
-            <div class="form-group">
-                <label for="email">Email Address</label>
-                <input type="email" id="email" name="email" placeholder="your@email.com" required>
+        <div class="card">
+            {% if success %}
+            <div class="success-state">
+                <div class="icon">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                </div>
+                <h2>Check your email</h2>
+                <p>We sent a magic link to sign you in.<br>It expires in 15 minutes.</p>
             </div>
-            <button type="submit">Send Magic Link</button>
-        </form>
+            {% else %}
+            {% if error %}
+            <div class="message error">{{ error }}</div>
+            {% endif %}
 
-        <div class="info">
-            We'll send you a secure link to log in. No password needed!
+            <form method="POST">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email" autofocus>
+                </div>
+                <button type="submit">Continue</button>
+            </form>
+
+            <div class="footer">
+                No password needed. We'll send you a link.
+            </div>
+            {% endif %}
         </div>
-        {% endif %}
+
+        <div class="cli-hint">
+            <p>Prefer the command line?</p>
+            <code>curl -X POST makearjowork.com/api/tasks</code>
+        </div>
     </div>
 </body>
 </html>

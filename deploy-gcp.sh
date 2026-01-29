@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy to Google Cloud Run
+# Deploy to Google Cloud Run with Cloud SQL
 # Prerequisites: gcloud CLI installed and authenticated
 
 set -e
@@ -7,22 +7,17 @@ set -e
 PROJECT_ID=${1:-$(gcloud config get-value project)}
 REGION=${2:-us-central1}
 SERVICE_NAME="makearjowork"
-IMAGE_NAME="gcr.io/$PROJECT_ID/$SERVICE_NAME"
+CLOUD_SQL_INSTANCE="$PROJECT_ID:$REGION:makearjowork-db"
 
-echo "=== Building Docker image ==="
-docker build -t $IMAGE_NAME .
-
-echo "=== Pushing to Google Container Registry ==="
-docker push $IMAGE_NAME
-
-echo "=== Deploying to Cloud Run ==="
+echo "=== Deploying to Cloud Run (builds from source) ==="
 gcloud run deploy $SERVICE_NAME \
-    --image $IMAGE_NAME \
+    --source . \
     --platform managed \
     --region $REGION \
     --allow-unauthenticated \
-    --set-env-vars "DOMAIN=https://$SERVICE_NAME-$PROJECT_ID.run.app" \
-    --set-secrets "SECRET_KEY=secret-key:latest,SMTP_USER=smtp-user:latest,SMTP_PASS=smtp-pass:latest,FROM_EMAIL=from-email:latest"
+    --add-cloudsql-instances $CLOUD_SQL_INSTANCE \
+    --set-env-vars "USE_CLOUD_SQL=true,CLOUD_SQL_CONNECTION=$CLOUD_SQL_INSTANCE,DB_USER=appuser,DB_NAME=makearjowork,DOMAIN=https://makearjowork.com" \
+    --set-secrets "SECRET_KEY=secret-key:latest,DB_PASS=db-password:latest"
 
 echo ""
 echo "=== Deployment complete! ==="
@@ -31,10 +26,7 @@ gcloud run services describe $SERVICE_NAME --region $REGION --format 'value(stat
 
 echo ""
 echo "=== Next steps ==="
-echo "1. Set up secrets in Google Secret Manager:"
-echo "   gcloud secrets create secret-key --data-file=-"
-echo "   gcloud secrets create smtp-user --data-file=-"
-echo "   gcloud secrets create smtp-pass --data-file=-"
-echo ""
-echo "2. Map your custom domain:"
-echo "   gcloud beta run domain-mappings create --service $SERVICE_NAME --domain makearjowork.com --region $REGION"
+echo "1. Configure Cloudflare DNS to point makearjowork.com to Cloud Run"
+echo "2. Set up SMTP secrets if you need email login:"
+echo "   echo 'your-smtp-user' | gcloud secrets create smtp-user --data-file=-"
+echo "   echo 'your-smtp-pass' | gcloud secrets create smtp-pass --data-file=-"
