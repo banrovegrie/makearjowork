@@ -52,7 +52,7 @@ jobs:
             --allow-unauthenticated \
             --add-cloudsql-instances ${{ env.PROJECT_ID }}:${{ env.REGION }}:makearjowork-db \
             --set-env-vars "USE_CLOUD_SQL=true,CLOUD_SQL_CONNECTION=${{ env.PROJECT_ID }}:${{ env.REGION }}:makearjowork-db,DB_USER=appuser,DB_NAME=makearjowork,DOMAIN=https://makearjowork.com" \
-            --set-secrets "SECRET_KEY=secret-key:latest,DB_PASS=db-password:latest"
+            --set-secrets "SECRET_KEY=secret-key:latest,DB_PASS=db-password:latest,SMTP_USER=smtp-user:latest,SMTP_PASS=smtp-pass:latest,GEMINI_API_KEY=gemini-api-key:latest"
 
       - name: Show Service URL
         run: |

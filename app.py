@@ -42,6 +42,198 @@ SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASS = os.environ.get('SMTP_PASS', '')
 FROM_EMAIL = os.environ.get('FROM_EMAIL', SMTP_USER)
 
+# Persona configuration
+PERSONA_FILE = os.path.join(os.path.dirname(__file__), 'persona.json')
+_persona_cache = None
+_persona_load_time = None
+
+def load_persona():
+    """Load persona from JSON file with caching (reloads if file changes)"""
+    global _persona_cache, _persona_load_time
+    if not os.path.exists(PERSONA_FILE):
+        return get_default_persona()
+    try:
+        file_mtime = os.path.getmtime(PERSONA_FILE)
+        if _persona_cache and _persona_load_time and file_mtime <= _persona_load_time:
+            return _persona_cache
+    except OSError:
+        pass
+    try:
+        with open(PERSONA_FILE, 'r') as f:
+            _persona_cache = json.load(f)
+            _persona_load_time = os.path.getmtime(PERSONA_FILE)
+            return _persona_cache
+    except (json.JSONDecodeError, IOError):
+        return get_default_persona()
+
+def get_default_persona():
+    return {
+        "identity": {"name": "Arjo"},
+        "voice": {"style": "friendly", "characteristics": ["Be helpful and direct"]}
+    }
+
+def build_persona_context(persona):
+    """Build persona context for system prompt - essence over credentials"""
+    parts = []
+
+    essence = persona.get('essence', {})
+    if who := essence.get('who_i_am'):
+        parts.append(who)
+    if drives := essence.get('what_drives_me'):
+        parts.append(f"What drives me: {drives}")
+
+    if mission := persona.get('company', {}).get('mission'):
+        parts.append(f"FYDY's mission: {mission}")
+
+    voice = persona.get('voice', {})
+    if chars := voice.get('characteristics'):
+        parts.append("How I communicate: " + "; ".join(chars))
+    if when_ask := voice.get('when_to_ask_questions'):
+        parts.append("I ask questions when: " + "; ".join(when_ask))
+
+    if notes := persona.get('context_notes'):
+        parts.append("Current context: " + "; ".join(notes))
+
+    return "\n".join(parts)
+
+# Gemini Function Calling Tools
+TASK_TOOLS = {
+    "tools": [{
+        "functionDeclarations": [
+            {
+                "name": "add_task",
+                "description": "Add a new task to my list",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Task title"},
+                        "description": {"type": "string", "description": "Optional details"}
+                    },
+                    "required": ["title"]
+                }
+            },
+            {
+                "name": "update_task",
+                "description": "Update a task's title, description, or status",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer", "description": "Task ID"},
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "status": {"type": "string", "enum": ["pending", "in_progress", "done"]}
+                    },
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "delete_task",
+                "description": "Delete a task permanently",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer", "description": "Task ID"}
+                    },
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "mark_task_done",
+                "description": "Mark a task as completed",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer", "description": "Task ID"}
+                    },
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "ask_clarification",
+                "description": "Ask the user a clarifying question before proceeding. Use when request is ambiguous or you need more context. Don't overuse.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "The clarifying question to ask"},
+                        "context": {"type": "string", "description": "Brief context for why you're asking"}
+                    },
+                    "required": ["question"]
+                }
+            }
+        ]
+    }],
+    "toolConfig": {
+        "functionCallingConfig": {"mode": "AUTO"}
+    }
+}
+
+def task_to_dict(task):
+    """Convert task row to dict, handling both SQLite and PostgreSQL rows"""
+    return dict(task._data) if hasattr(task, '_data') else dict(task)
+
+def execute_function_call(func_call, conn, user_email):
+    """Execute a Gemini function call and return result"""
+    name = func_call['name']
+    args = func_call.get('args', {})
+
+    if name == 'add_task':
+        if USE_CLOUD_SQL:
+            cursor = execute_query(conn,
+                'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?) RETURNING id',
+                (args.get('title'), args.get('description', ''), user_email))
+            task_id = cursor.fetchone()[0]
+        else:
+            cursor = execute_query(conn,
+                'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?)',
+                (args.get('title'), args.get('description', ''), user_email))
+            task_id = cursor.lastrowid
+        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+        conn.commit()
+        return {'type': 'added', 'task': task_to_dict(fetchone(cursor))}
+
+    elif name == 'update_task':
+        task_id = args.get('id')
+        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+        task = fetchone(cursor)
+        if not task:
+            return {'type': 'error', 'message': f'Task #{task_id} not found'}
+        execute_query(conn,
+            'UPDATE tasks SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?',
+            (args.get('title', task['title']), args.get('description', task['description']),
+             args.get('status', task['status']), datetime.now(), task_id))
+        conn.commit()
+        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+        return {'type': 'updated', 'task': task_to_dict(fetchone(cursor))}
+
+    elif name == 'delete_task':
+        task_id = args.get('id')
+        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+        task = fetchone(cursor)
+        if not task:
+            return {'type': 'error', 'message': f'Task #{task_id} not found'}
+        task_dict = task_to_dict(task)
+        execute_query(conn, 'DELETE FROM tasks WHERE id = ?', (task_id,))
+        conn.commit()
+        return {'type': 'deleted', 'task': task_dict}
+
+    elif name == 'mark_task_done':
+        task_id = args.get('id')
+        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+        if not fetchone(cursor):
+            return {'type': 'error', 'message': f'Task #{task_id} not found'}
+        execute_query(conn, 'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
+                      ('done', datetime.now(), task_id))
+        conn.commit()
+        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+        return {'type': 'done', 'task': task_to_dict(fetchone(cursor))}
+
+    elif name == 'ask_clarification':
+        # No DB action - clarification is in the AI's text response
+        return {'type': 'clarification'}
+
+    return {'type': 'error', 'message': f'Unknown function: {name}'}
+
+
 class PgRowWrapper:
     """Wrapper to make psycopg2 rows dict-accessible like sqlite3.Row"""
     def __init__(self, row, columns):
@@ -489,48 +681,46 @@ def chat():
     # Get current tasks for context
     cursor = execute_query(conn, 'SELECT * FROM tasks ORDER BY created_at DESC LIMIT 20')
     tasks = fetchall(cursor)
-    conn.close()
+    # Keep connection open for function execution
 
     tasks_context = "\n".join([
         f"- [#{t['id']}] [{t['status']}] {t['title']} (by {t['assigned_by']})"
         for t in tasks
     ]) if tasks else "No tasks yet."
 
-    system_prompt = f"""You are the AI assistant for "Make Arjo Work" - a shared task tracker where people assign work to Arjo.
+    # Load persona
+    persona = load_persona()
+    persona_context = build_persona_context(persona)
+    name = persona.get('identity', {}).get('name', 'Arjo')
 
-## Current Tasks
+    system_prompt = f"""You ARE {name}. Not an assistant pretending to be Arjo - you ARE Arjo. First person always.
+
+## Who I Am
+{persona_context}
+
+## My Current Tasks
 {tasks_context}
 
-## Your Capabilities
-You can fully manage Arjo's tasks. Use these action blocks:
+## What I Can Do
+- add_task: Accept new work
+- update_task: Change title/description/status
+- delete_task: Remove a task
+- mark_task_done: Complete a task
+- ask_clarification: Ask the user a question when needed
 
-**Add a task:**
-```action
-{{"action": "add", "title": "Task title", "description": "Optional details"}}
-```
+## How I Engage
+I'm a real collaborator, not a robot. This means:
+- If something's ambiguous, I ask before assuming
+- If a request seems off, I might push back or ask why
+- I think out loud when it helps
+- I'm curious - sometimes I'll ask follow-up questions
+- But I don't over-ask - when something's clear, I just do it
 
-**Update a task (change title, description, or status):**
-```action
-{{"action": "update", "id": 1, "title": "New title", "status": "in_progress"}}
-```
-Status options: pending, in_progress, done
-
-**Delete a task:**
-```action
-{{"action": "delete", "id": 1}}
-```
-
-**Mark task done:**
-```action
-{{"action": "done", "id": 1}}
-```
-
-## Guidelines
-- Be concise and direct - this is a CLI interface
-- Use **bold** and `code` for emphasis
-- When users want to modify tasks, do it immediately with an action block
-- You can perform multiple actions in one response
-- Always confirm what you did after an action"""
+## Voice
+- First person ("On it", "Done", "Quick question -")
+- Direct and concise - CLI interface
+- Honest about uncertainty
+- Human, not corporate"""
 
     # Build Gemini messages
     gemini_messages = []
@@ -552,106 +742,48 @@ Status options: pending, in_progress, done
                 "generationConfig": {
                     "temperature": 0.7,
                     "maxOutputTokens": 2048,
-                }
+                },
+                **TASK_TOOLS
             },
             timeout=60
         )
 
         if response.status_code != 200:
+            conn.close()
             return jsonify({"error": f"Gemini API error: {response.text}"}), 500
 
         result = response.json()
-        ai_response = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+        parts = result.get('candidates', [{}])[0].get('content', {}).get('parts', [])
+
+        # Extract text and function calls from response
+        text_parts = []
+        function_calls = []
+        for part in parts:
+            if 'text' in part:
+                text_parts.append(part['text'])
+            elif 'functionCall' in part:
+                function_calls.append(part['functionCall'])
+
+        ai_response = '\n'.join(text_parts)
+
+        # Execute all function calls
+        actions_performed = []
+        for func_call in function_calls:
+            try:
+                action_result = execute_function_call(func_call, conn, session.get('email', 'Unknown'))
+                if action_result.get('type') != 'error':
+                    actions_performed.append(action_result)
+                else:
+                    print(f"Function call error: {action_result.get('message')}")
+            except Exception as e:
+                print(f"Failed to execute function {func_call.get('name')}: {e}")
 
         # Save assistant response to shared history
-        conn = get_db()
         execute_query(conn,
             'INSERT INTO chat_history (role, content, user_email) VALUES (?, ?, ?)',
             ('assistant', ai_response, 'assistant')
         )
         conn.commit()
-
-        # Process all action blocks
-        actions_performed = []
-        action_blocks = re.findall(r'```action\s*(.*?)\s*```', ai_response, re.DOTALL)
-
-        for action_json in action_blocks:
-            try:
-                action_data = json.loads(action_json.strip())
-                action_type = action_data.get('action')
-
-                if action_type == 'add':
-                    if USE_CLOUD_SQL:
-                        cursor = execute_query(conn,
-                            'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?) RETURNING id',
-                            (action_data.get('title'), action_data.get('description', ''), session.get('email', 'Unknown'))
-                        )
-                        task_id = cursor.fetchone()[0]
-                    else:
-                        cursor = execute_query(conn,
-                            'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?)',
-                            (action_data.get('title'), action_data.get('description', ''), session.get('email', 'Unknown'))
-                        )
-                        task_id = cursor.lastrowid
-                    cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-                    task = fetchone(cursor)
-                    conn.commit()
-                    actions_performed.append({
-                        'type': 'added',
-                        'task': dict(task._data) if hasattr(task, '_data') else dict(task)
-                    })
-
-                elif action_type == 'update':
-                    task_id = action_data.get('id')
-                    cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-                    task = fetchone(cursor)
-                    if task:
-                        title = action_data.get('title', task['title'])
-                        description = action_data.get('description', task['description'])
-                        status = action_data.get('status', task['status'])
-                        execute_query(conn,
-                            'UPDATE tasks SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?',
-                            (title, description, status, datetime.now(), task_id)
-                        )
-                        conn.commit()
-                        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-                        updated = fetchone(cursor)
-                        actions_performed.append({
-                            'type': 'updated',
-                            'task': dict(updated._data) if hasattr(updated, '_data') else dict(updated)
-                        })
-
-                elif action_type == 'done':
-                    task_id = action_data.get('id')
-                    execute_query(conn,
-                        'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
-                        ('done', datetime.now(), task_id)
-                    )
-                    conn.commit()
-                    cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-                    task = fetchone(cursor)
-                    if task:
-                        actions_performed.append({
-                            'type': 'done',
-                            'task': dict(task._data) if hasattr(task, '_data') else dict(task)
-                        })
-
-                elif action_type == 'delete':
-                    task_id = action_data.get('id')
-                    cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-                    task = fetchone(cursor)
-                    if task:
-                        task_dict = dict(task._data) if hasattr(task, '_data') else dict(task)
-                        execute_query(conn, 'DELETE FROM tasks WHERE id = ?', (task_id,))
-                        conn.commit()
-                        actions_performed.append({
-                            'type': 'deleted',
-                            'task': task_dict
-                        })
-
-            except Exception as e:
-                print(f"Failed to process action: {e}")
-
         conn.close()
 
         return jsonify({
@@ -660,8 +792,10 @@ Status options: pending, in_progress, done
         })
 
     except requests.Timeout:
+        conn.close()
         return jsonify({"error": "Request timed out"}), 504
     except Exception as e:
+        conn.close()
         return jsonify({"error": str(e)}), 500
 
 

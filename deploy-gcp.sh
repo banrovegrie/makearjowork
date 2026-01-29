@@ -17,7 +17,7 @@ gcloud run deploy $SERVICE_NAME \
     --allow-unauthenticated \
     --add-cloudsql-instances $CLOUD_SQL_INSTANCE \
     --set-env-vars "USE_CLOUD_SQL=true,CLOUD_SQL_CONNECTION=$CLOUD_SQL_INSTANCE,DB_USER=appuser,DB_NAME=makearjowork,DOMAIN=https://makearjowork.com" \
-    --set-secrets "SECRET_KEY=secret-key:latest,DB_PASS=db-password:latest"
+    --set-secrets "SECRET_KEY=secret-key:latest,DB_PASS=db-password:latest,SMTP_USER=smtp-user:latest,SMTP_PASS=smtp-pass:latest,GEMINI_API_KEY=gemini-api-key:latest"
 
 echo ""
 echo "=== Deployment complete! ==="
@@ -27,6 +27,3 @@ gcloud run services describe $SERVICE_NAME --region $REGION --format 'value(stat
 echo ""
 echo "=== Next steps ==="
 echo "1. Configure Cloudflare DNS to point makearjowork.com to Cloud Run"
-echo "2. Set up SMTP secrets if you need email login:"
-echo "   echo 'your-smtp-user' | gcloud secrets create smtp-user --data-file=-"
-echo "   echo 'your-smtp-pass' | gcloud secrets create smtp-pass --data-file=-"

@@ -768,9 +768,10 @@
                 if (data.error) {
                     addLine('system', `Error: ${data.error}`);
                 } else {
-                    // Remove action blocks from display
-                    let response = data.response.replace(/```action[\s\S]*?```/g, '').trim();
-                    addLine('assistant', response);
+                    // Display response (function calls handled server-side)
+                    if (data.response) {
+                        addLine('assistant', data.response);
+                    }
 
                     // Show action cards
                     if (data.actions && data.actions.length > 0) {
