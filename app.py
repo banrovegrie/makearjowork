@@ -352,46 +352,51 @@ def init_db():
     conn = get_db()
     if USE_CLOUD_SQL:
         cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                is_admin INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS magic_links (
-                id SERIAL PRIMARY KEY,
-                email TEXT NOT NULL,
-                token TEXT UNIQUE NOT NULL,
-                expires_at TIMESTAMP NOT NULL,
-                used INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tasks (
-                id SERIAL PRIMARY KEY,
-                title TEXT NOT NULL,
-                description TEXT,
-                assigned_by TEXT NOT NULL,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS chat_history (
-                id SERIAL PRIMARY KEY,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                user_email TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        conn.close()
+        try:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    email TEXT UNIQUE NOT NULL,
+                    is_admin INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS magic_links (
+                    id SERIAL PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    token TEXT UNIQUE NOT NULL,
+                    expires_at TIMESTAMP NOT NULL,
+                    used INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id SERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    assigned_by TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    id SERIAL PRIMARY KEY,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    user_email TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.commit()
+        except Exception as e:
+            # Tables already exist or concurrent init - safe to ignore
+            conn.rollback()
+        finally:
+            conn.close()
     else:
         conn.executescript('''
             CREATE TABLE IF NOT EXISTS users (
