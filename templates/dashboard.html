@@ -613,6 +613,9 @@
         loadHistory();
         loadTasks();
 
+        // Ensure input is focused on page load
+        input.focus();
+
         // Handle input changes for hints
         input.addEventListener('input', () => {
             const val = input.value;
@@ -674,9 +677,8 @@
 
         // Auto-focus input when typing anywhere
         document.addEventListener('keydown', e => {
-            // Ignore if already in input, or modal is open, or modifier keys
+            // Ignore if already in input or modifier keys
             if (document.activeElement === input) return;
-            if (document.getElementById('modal').classList.contains('active')) return;
             if (e.ctrlKey || e.metaKey || e.altKey) return;
             // Ignore special keys
             if (['Escape', 'Tab', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
@@ -808,6 +810,9 @@
         }
 
         function addActionCard(action) {
+            // Skip actions without task data (like clarification)
+            if (!action.task) return;
+
             const el = document.createElement('div');
             el.className = `action-card ${action.type}`;
 
