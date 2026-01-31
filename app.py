@@ -1106,6 +1106,27 @@ def delete_read(read_id):
     return '', 204
 
 
+# Debug endpoint - check reads table (remove after debugging)
+@app.route('/api/debug/reads-status', methods=['GET'])
+def debug_reads_status():
+    conn = get_db()
+    try:
+        cursor = execute_query(conn, 'SELECT COUNT(*) as count FROM reads')
+        row = cursor.fetchone()
+        count = row[0] if row else 0
+
+        cursor = execute_query(conn, 'SELECT id, title, status FROM reads ORDER BY id DESC LIMIT 5')
+        reads = []
+        for r in cursor.fetchall():
+            reads.append({'id': r[0], 'title': r[1], 'status': r[2]})
+
+        return jsonify({'count': count, 'recent': reads})
+    except Exception as e:
+        return jsonify({'error': str(e)})
+    finally:
+        conn.close()
+
+
 # Internal maintenance endpoint - requires secret token
 @app.route('/api/internal/clear-all-chats/<token>', methods=['POST'])
 def internal_clear_all_chats(token):
