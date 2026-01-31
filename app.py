@@ -641,16 +641,18 @@ def init_db():
     conn = get_db()
     if USE_CLOUD_SQL:
         cursor = conn.cursor()
-        try:
-            cursor.execute('''
+
+        # Create each table separately so one failure doesn't affect others
+        tables = [
+            ('users', '''
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
                     email TEXT UNIQUE NOT NULL,
                     is_admin INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
-            cursor.execute('''
+            '''),
+            ('magic_links', '''
                 CREATE TABLE IF NOT EXISTS magic_links (
                     id SERIAL PRIMARY KEY,
                     email TEXT NOT NULL,
@@ -659,8 +661,8 @@ def init_db():
                     used INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
-            cursor.execute('''
+            '''),
+            ('tasks', '''
                 CREATE TABLE IF NOT EXISTS tasks (
                     id SERIAL PRIMARY KEY,
                     title TEXT NOT NULL,
@@ -670,8 +672,8 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
-            cursor.execute('''
+            '''),
+            ('chat_history', '''
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id SERIAL PRIMARY KEY,
                     role TEXT NOT NULL,
@@ -679,13 +681,8 @@ def init_db():
                     user_email TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
-            # Create index for per-user chat history queries
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_chat_history_user_email
-                ON chat_history(user_email)
-            ''')
-            cursor.execute('''
+            '''),
+            ('reads', '''
                 CREATE TABLE IF NOT EXISTS reads (
                     id SERIAL PRIMARY KEY,
                     title TEXT NOT NULL,
@@ -697,13 +694,28 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
+            '''),
+        ]
+
+        for table_name, create_sql in tables:
+            try:
+                cursor.execute(create_sql)
+                conn.commit()
+            except Exception as e:
+                print(f"Table {table_name}: {e}")
+                conn.rollback()
+
+        # Create index separately
+        try:
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_chat_history_user_email
+                ON chat_history(user_email)
             ''')
             conn.commit()
         except Exception:
-            # Tables already exist or concurrent init - safe to ignore
             conn.rollback()
-        finally:
-            conn.close()
+
+        conn.close()
     else:
         # SQLite path - executescript is available on sqlite3.Connection
         conn.executescript(  # type: ignore[union-attr]
