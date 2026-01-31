@@ -756,6 +756,20 @@ def delete_task(task_id):
     return '', 204
 
 
+# Internal maintenance endpoint - requires secret token
+@app.route('/api/internal/clear-all-chats/<token>', methods=['POST'])
+def internal_clear_all_chats(token):
+    """Clear all chat history - requires MAINTENANCE_TOKEN env var"""
+    expected = os.environ.get('MAINTENANCE_TOKEN', '')
+    if not expected or token != expected:
+        return '', 404  # Pretend it doesn't exist
+    conn = get_db()
+    execute_query(conn, 'DELETE FROM chat_history')
+    conn.commit()
+    conn.close()
+    return jsonify({'cleared': True})
+
+
 # Get per-user chat history
 # Note: user_email now stores the conversation owner (the user), not the sender role
 # This allows filtering conversations per user while keeping role in 'role' column
