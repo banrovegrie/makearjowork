@@ -1313,14 +1313,18 @@ def chat():
                 atype = action.get('type')
                 if atype == 'added':
                     summaries.append(f"Added task: {action['task']['title']}")
+                elif atype == 'updated':
+                    summaries.append(f"Updated task: {action['task']['title']}")
                 elif atype == 'done':
                     summaries.append(f"Completed: {action['task']['title']}")
-                elif atype == 'read_added':
-                    summaries.append(f"Added to reading list: {action['read']['title']}")
-                elif atype == 'read_done':
-                    summaries.append(f"Marked as read: {action['read']['title']}")
                 elif atype == 'deleted':
                     summaries.append(f"Deleted task: {action['task']['title']}")
+                elif atype == 'read_added':
+                    summaries.append(f"Added to reading list: {action['read']['title']}")
+                elif atype == 'read_updated':
+                    summaries.append(f"Updated: {action['read']['title']}")
+                elif atype == 'read_done':
+                    summaries.append(f"Marked as read: {action['read']['title']}")
                 elif atype == 'read_deleted':
                     summaries.append(f"Removed: {action['read']['title']}")
             if summaries:
