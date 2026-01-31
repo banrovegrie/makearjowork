@@ -785,6 +785,20 @@ def make_admin():
     return jsonify({'success': True})
 
 
+@app.route('/api/admin/bootstrap', methods=['POST'])
+@login_required
+def bootstrap_admin():
+    """One-time bootstrap: first arjo@ user becomes admin"""
+    email = session.get('email', '')
+    if not email.startswith('arjo@'):
+        return jsonify({'error': 'Only arjo@ can bootstrap'}), 403
+    conn = get_db()
+    execute_query(conn, 'UPDATE users SET is_admin = 1 WHERE email = ?', (email,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': f'{email} is now admin'})
+
+
 @app.route('/api/admin/clear-all-chats', methods=['POST'])
 @admin_required
 def clear_all_chats():
