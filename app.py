@@ -999,14 +999,17 @@ def get_reads():
     status = request.args.get('status')
     conn = get_db()
 
-    if status:
-        cursor = execute_query(conn,
-            'SELECT * FROM reads WHERE status = ? ORDER BY created_at DESC',
-            (status,))
-    else:
-        cursor = execute_query(conn, 'SELECT * FROM reads ORDER BY created_at DESC')
+    try:
+        if status:
+            cursor = execute_query(conn,
+                'SELECT * FROM reads WHERE status = ? ORDER BY created_at DESC',
+                (status,))
+        else:
+            cursor = execute_query(conn, 'SELECT * FROM reads ORDER BY created_at DESC')
 
-    reads = [task_to_dict(r) for r in fetchall(cursor)]
+        reads = [task_to_dict(r) for r in fetchall(cursor)]
+    except Exception:
+        reads = []  # Table may not exist yet
     conn.close()
     return jsonify(reads)
 
@@ -1160,13 +1163,17 @@ def chat():
         for t in tasks
     ]) if tasks else "No tasks yet."
 
-    # Get current reads
-    cursor = execute_query(conn, 'SELECT * FROM reads ORDER BY created_at DESC LIMIT 20')
-    reads = fetchall(cursor)
-    reads_context = "\n".join([
-        f"- [#{r['id']}] [{r['status']}] {r['title']}" + (f" ({r['url']})" if r['url'] else "")
-        for r in reads
-    ]) if reads else ""
+    # Get current reads (graceful fallback if table doesn't exist yet)
+    reads_context = ""
+    try:
+        cursor = execute_query(conn, 'SELECT * FROM reads ORDER BY created_at DESC LIMIT 20')
+        reads = fetchall(cursor)
+        reads_context = "\n".join([
+            f"- [#{r['id']}] [{r['status']}] {r['title']}" + (f" ({r['url']})" if r['url'] else "")
+            for r in reads
+        ]) if reads else ""
+    except Exception:
+        pass  # Table may not exist yet on first deploy
 
     # Get user's chat history for conversation continuity
     cursor = execute_query(conn,
