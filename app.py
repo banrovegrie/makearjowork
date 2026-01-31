@@ -95,11 +95,11 @@ def build_system_prompt(tasks_context, reads_context=""):
 - mark_task_done: Complete a task
 
 ### Reading List
-- add_read: Add paper/book to reading list
+- add_read: Add paper/book to reading list (can include url, author)
 - update_read: Update a reading list item
 - delete_read: Remove from reading list
 - mark_read_done: Mark as read
-- search_arxiv: Find paper URL on arxiv (use before add_read)
+- search_arxiv: Search arxiv for a paper URL (call this first, then use the result to call add_read)
 
 ### Other
 - ask_clarification: Ask when something is unclear
@@ -1239,60 +1239,88 @@ def chat():
             history=gemini_history if gemini_history else None,
         )
 
-        # Send the new message
+        # Send the new message and handle function calling loop
         response = gemini_chat.send_message(user_message)
 
-        # Extract text and function calls from response
         ai_response = ""
-        function_calls: list[dict[str, Any]] = []
-
-        if response.candidates:
-            for candidate in response.candidates:
-                if candidate.content and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'text') and part.text:
-                            ai_response += part.text
-                        if hasattr(part, 'function_call') and part.function_call:
-                            function_calls.append({
-                                "name": part.function_call.name,
-                                "args": dict(part.function_call.args) if part.function_call.args else {}
-                            })
-
-        # Execute all function calls
         actions_performed = []
         action_descriptions = []
-        for func_call in function_calls:
-            # Handle ask_clarification specially - use question as response
-            if func_call.get('name') == 'ask_clarification':
-                question = func_call.get('args', {}).get('question', '')
-                if question and not ai_response:
-                    ai_response = question
-                actions_performed.append({'type': 'clarification'})
-                continue
 
-            result = execute_function_call(func_call, conn, user_email)
-            if result.get('type') != 'error':
-                actions_performed.append(result)
-                # Build description for history
-                if result.get('type') == 'added':
-                    action_descriptions.append(f"Added task: {result['task']['title']}")
-                elif result.get('type') == 'updated':
-                    action_descriptions.append(f"Updated task #{result['task']['id']}")
-                elif result.get('type') == 'deleted':
-                    action_descriptions.append(f"Deleted task: {result['task']['title']}")
-                elif result.get('type') == 'done':
-                    action_descriptions.append(f"Completed task: {result['task']['title']}")
-                elif result.get('type') == 'read_added':
-                    action_descriptions.append(f"Added to reading list: {result['read']['title']}")
-                elif result.get('type') == 'read_updated':
-                    action_descriptions.append(f"Updated read #{result['read']['id']}")
-                elif result.get('type') == 'read_deleted':
-                    action_descriptions.append(f"Removed from reading list: {result['read']['title']}")
-                elif result.get('type') == 'read_done':
-                    action_descriptions.append(f"Marked as read: {result['read']['title']}")
-                elif result.get('type') == 'arxiv_result':
-                    if 'error' not in result.get('result', {}):
-                        action_descriptions.append(f"Found on arxiv: {result['result'].get('title', 'Unknown')}")
+        # Loop to handle chained function calls (max 5 iterations for safety)
+        for _ in range(5):
+            function_calls: list[dict[str, Any]] = []
+            function_responses = []
+
+            if response.candidates:
+                for candidate in response.candidates:
+                    if candidate.content and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                ai_response += part.text
+                            if hasattr(part, 'function_call') and part.function_call:
+                                function_calls.append({
+                                    "name": part.function_call.name,
+                                    "args": dict(part.function_call.args) if part.function_call.args else {}
+                                })
+
+            # If no function calls, we're done
+            if not function_calls:
+                break
+
+            # Execute function calls and collect responses
+            for func_call in function_calls:
+                func_name = func_call.get('name', '')
+
+                # Handle ask_clarification specially
+                if func_name == 'ask_clarification':
+                    question = func_call.get('args', {}).get('question', '')
+                    if question and not ai_response:
+                        ai_response = question
+                    actions_performed.append({'type': 'clarification'})
+                    function_responses.append(types.Part.from_function_response(
+                        name=func_name,
+                        response={'status': 'asked'}
+                    ))
+                    continue
+
+                result = execute_function_call(func_call, conn, user_email)
+                if result.get('type') != 'error':
+                    actions_performed.append(result)
+
+                # Send function result back to model
+                function_responses.append(types.Part.from_function_response(
+                    name=func_name,
+                    response=result
+                ))
+
+            # If we have function responses, send them back to get next response
+            if function_responses:
+                response = gemini_chat.send_message(function_responses)
+            else:
+                break
+
+        # Build action descriptions for history
+        for action in actions_performed:
+            action_type = action.get('type')
+            if action_type == 'added':
+                action_descriptions.append(f"Added task: {action['task']['title']}")
+            elif action_type == 'updated':
+                action_descriptions.append(f"Updated task #{action['task']['id']}")
+            elif action_type == 'deleted':
+                action_descriptions.append(f"Deleted task: {action['task']['title']}")
+            elif action_type == 'done':
+                action_descriptions.append(f"Completed task: {action['task']['title']}")
+            elif action_type == 'read_added':
+                action_descriptions.append(f"Added to reading list: {action['read']['title']}")
+            elif action_type == 'read_updated':
+                action_descriptions.append(f"Updated read #{action['read']['id']}")
+            elif action_type == 'read_deleted':
+                action_descriptions.append(f"Removed from reading list: {action['read']['title']}")
+            elif action_type == 'read_done':
+                action_descriptions.append(f"Marked as read: {action['read']['title']}")
+            elif action_type == 'arxiv_result':
+                if 'error' not in action.get('result', {}):
+                    action_descriptions.append(f"Found on arxiv: {action['result'].get('title', 'Unknown')}")
 
         # Build response for history - ALWAYS include action descriptions so AI remembers what it did
         history_response = ai_response.strip()
