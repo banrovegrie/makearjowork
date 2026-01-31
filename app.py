@@ -534,21 +534,6 @@ def login_required(f):
     return decorated_function
 
 
-def admin_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
-            return redirect(url_for('login'))
-        conn = get_db()
-        cursor = execute_query(conn, 'SELECT is_admin FROM users WHERE id = ?', (session['user_id'],))
-        user = fetchone(cursor)
-        conn.close()
-        if not user or not user['is_admin']:
-            return jsonify({'error': 'Admin access required'}), 403
-        return f(*args, **kwargs)
-    return decorated_function
-
-
 def send_magic_link(email, token):
     link = f"{DOMAIN}/auth/{token}"
 
@@ -771,46 +756,6 @@ def delete_task(task_id):
     return '', 204
 
 
-@app.route('/api/users/make-admin', methods=['POST'])
-@admin_required
-def make_admin():
-    data = request.json
-    email = data.get('email', '').lower().strip()
-
-    conn = get_db()
-    execute_query(conn, 'UPDATE users SET is_admin = 1 WHERE email = ?', (email,))
-    conn.commit()
-    conn.close()
-
-    return jsonify({'success': True})
-
-
-@app.route('/api/admin/bootstrap/<token>', methods=['POST'])
-@login_required
-def bootstrap_admin(token):
-    """One-time bootstrap: requires secret token from environment"""
-    bootstrap_token = os.environ.get('ADMIN_BOOTSTRAP_TOKEN', '')
-    if not bootstrap_token or token != bootstrap_token:
-        return jsonify({'error': 'Invalid token'}), 403
-    email = session.get('email', '')
-    conn = get_db()
-    execute_query(conn, 'UPDATE users SET is_admin = 1 WHERE email = ?', (email,))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'message': f'{email} is now admin'})
-
-
-@app.route('/api/admin/clear-all-chats', methods=['POST'])
-@admin_required
-def clear_all_chats():
-    """Admin endpoint to clear all chat history for all users"""
-    conn = get_db()
-    execute_query(conn, 'DELETE FROM chat_history')
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'message': 'All chat history cleared'})
-
-
 # Get per-user chat history
 # Note: user_email now stores the conversation owner (the user), not the sender role
 # This allows filtering conversations per user while keeping role in 'role' column
@@ -970,25 +915,6 @@ def chat():
     except Exception as e:
         conn.close()
         return jsonify({"error": str(e)}), 500
-
-
-# CLI command to make first admin
-@app.cli.command('make-admin')
-def make_first_admin():
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: flask make-admin <email>")
-        return
-    email = sys.argv[1].lower().strip()
-    conn = get_db()
-    if USE_CLOUD_SQL:
-        execute_query(conn, 'INSERT INTO users (email, is_admin) VALUES (?, 1) ON CONFLICT (email) DO UPDATE SET is_admin = 1', (email,))
-    else:
-        execute_query(conn, 'INSERT OR IGNORE INTO users (email, is_admin) VALUES (?, 1)', (email,))
-        execute_query(conn, 'UPDATE users SET is_admin = 1 WHERE email = ?', (email,))
-    conn.commit()
-    conn.close()
-    print(f"Made {email} an admin")
 
 
 # Initialize database tables (runs on import for gunicorn compatibility)
