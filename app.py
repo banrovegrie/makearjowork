@@ -8,7 +8,7 @@ import json
 import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Any, Protocol
 import urllib.parse
@@ -512,9 +512,9 @@ def get_calendar_events() -> list[dict[str, Any]]:
         )
         service = build('calendar', 'v3', credentials=creds)  # type: ignore[misc]
 
-        now = datetime.utcnow()
-        time_min = now.isoformat() + 'Z'
-        time_max = (now + timedelta(days=5)).isoformat() + 'Z'
+        now = datetime.now(timezone.utc)
+        time_min = now.isoformat().replace('+00:00', 'Z')
+        time_max = (now + timedelta(days=5)).isoformat().replace('+00:00', 'Z')
 
         events = service.events().list(
             calendarId=os.environ.get('GOOGLE_CALENDAR_ID', 'primary'),
@@ -549,6 +549,31 @@ def add_link(query: str) -> dict[str, Any]:
         'title': query,
         'description': 'Click to search on Google and find the paper'
     }
+
+
+def describe_action(action: dict[str, Any]) -> str | None:
+    """Generate a human-readable description of an action."""
+    atype = action.get('type')
+    if atype == 'added':
+        return f"Added task: {action['task']['title']}"
+    elif atype == 'updated':
+        return f"Updated task: {action['task']['title']}"
+    elif atype == 'done':
+        return f"Completed: {action['task']['title']}"
+    elif atype == 'deleted':
+        return f"Deleted task: {action['task']['title']}"
+    elif atype == 'read_added':
+        return f"Added to reading list: {action['read']['title']}"
+    elif atype == 'read_updated':
+        return f"Updated: {action['read']['title']}"
+    elif atype == 'read_done':
+        return f"Marked as read: {action['read']['title']}"
+    elif atype == 'read_deleted':
+        return f"Removed: {action['read']['title']}"
+    elif atype == 'search_result':
+        if 'error' not in action.get('result', {}):
+            return f"Found: {action['result'].get('title', 'Unknown')}"
+    return None
 
 
 class RowLike(Protocol):
@@ -934,9 +959,9 @@ def create_task():
             (title, description, assigned_by)
         )
         task_id = cursor.lastrowid
+    conn.commit()
     cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
     task = fetchone(cursor)
-    conn.commit()
     conn.close()
 
     if task is None:
@@ -1034,9 +1059,9 @@ def create_read():
             (title, url, author, notes, added_by)
         )
         read_id = cursor.lastrowid
+    conn.commit()
     cursor = execute_query(conn, 'SELECT * FROM reads WHERE id = ?', (read_id,))
     read = fetchone(cursor)
-    conn.commit()
     conn.close()
 
     if read is None:
@@ -1093,7 +1118,7 @@ def delete_read(read_id):
 def internal_clear_all_chats(token):
     """Clear all chat history - requires MAINTENANCE_TOKEN env var"""
     expected = os.environ.get('MAINTENANCE_TOKEN', '')
-    if not expected or token != expected:
+    if not expected or not secrets.compare_digest(token, expected):
         return '', 404  # Pretend it doesn't exist
     conn = get_db()
     execute_query(conn, 'DELETE FROM chat_history')
@@ -1205,7 +1230,6 @@ def chat():
 
         ai_response = ""
         actions_performed = []
-        action_descriptions = []
 
         # Loop to handle chained function calls (max 5 iterations for safety)
         for _ in range(5):
@@ -1261,27 +1285,8 @@ def chat():
                 break
 
         # Build action descriptions for history
-        for action in actions_performed:
-            action_type = action.get('type')
-            if action_type == 'added':
-                action_descriptions.append(f"Added task: {action['task']['title']}")
-            elif action_type == 'updated':
-                action_descriptions.append(f"Updated task #{action['task']['id']}")
-            elif action_type == 'deleted':
-                action_descriptions.append(f"Deleted task: {action['task']['title']}")
-            elif action_type == 'done':
-                action_descriptions.append(f"Completed task: {action['task']['title']}")
-            elif action_type == 'read_added':
-                action_descriptions.append(f"Added to reading list: {action['read']['title']}")
-            elif action_type == 'read_updated':
-                action_descriptions.append(f"Updated read #{action['read']['id']}")
-            elif action_type == 'read_deleted':
-                action_descriptions.append(f"Removed from reading list: {action['read']['title']}")
-            elif action_type == 'read_done':
-                action_descriptions.append(f"Marked as read: {action['read']['title']}")
-            elif action_type == 'search_result':
-                if 'error' not in action.get('result', {}):
-                    action_descriptions.append(f"Found: {action['result'].get('title', 'Unknown')}")
+        action_descriptions = [describe_action(a) for a in actions_performed]
+        action_descriptions = [d for d in action_descriptions if d]  # Filter None
 
         # Build response for history - ALWAYS include action descriptions so AI remembers what it did
         history_response = ai_response.strip()
@@ -1306,29 +1311,8 @@ def chat():
 
         # If we performed actions but got no text response, generate a summary
         final_response = ai_response.strip()
-        if not final_response and actions_performed:
-            # Build a brief summary of what was done
-            summaries = []
-            for action in actions_performed:
-                atype = action.get('type')
-                if atype == 'added':
-                    summaries.append(f"Added task: {action['task']['title']}")
-                elif atype == 'updated':
-                    summaries.append(f"Updated task: {action['task']['title']}")
-                elif atype == 'done':
-                    summaries.append(f"Completed: {action['task']['title']}")
-                elif atype == 'deleted':
-                    summaries.append(f"Deleted task: {action['task']['title']}")
-                elif atype == 'read_added':
-                    summaries.append(f"Added to reading list: {action['read']['title']}")
-                elif atype == 'read_updated':
-                    summaries.append(f"Updated: {action['read']['title']}")
-                elif atype == 'read_done':
-                    summaries.append(f"Marked as read: {action['read']['title']}")
-                elif atype == 'read_deleted':
-                    summaries.append(f"Removed: {action['read']['title']}")
-            if summaries:
-                final_response = "Done. " + ", ".join(summaries) + "."
+        if not final_response and action_descriptions:
+            final_response = "Done. " + ", ".join(action_descriptions) + "."
 
         return jsonify({
             "response": final_response,

@@ -14,6 +14,7 @@
             --bg-secondary: #242424;
             --bg-tertiary: #2d2d2d;
             --text: #ffffff;
+            --text-muted: #d4d4d4;
             --text-user: #c8c8c8;
             --text-system: #707070;
             --accent: #10b981;
@@ -22,6 +23,7 @@
             --pending: #f59e0b;
             --progress: #3b82f6;
             --done: #10b981;
+            --code-color: #e879f9;
         }
 
         [data-theme="light"] {
@@ -29,6 +31,7 @@
             --bg-secondary: #ffffff;
             --bg-tertiary: #f0f0f0;
             --text: #1a1a1a;
+            --text-muted: #4a4a4a;
             --text-user: #4a4a4a;
             --text-system: #888888;
             --accent: #059669;
@@ -37,6 +40,7 @@
             --pending: #d97706;
             --progress: #2563eb;
             --done: #059669;
+            --code-color: #d946ef;
         }
 
 
@@ -152,13 +156,13 @@
         }
 
         .line-assistant strong {
-            color: #fff;
+            color: var(--text);
             font-weight: 600;
         }
 
         .line-assistant em {
             font-style: italic;
-            color: #d4d4d4;
+            color: var(--text-muted);
         }
 
         .line-assistant code {
@@ -166,7 +170,7 @@
             background: var(--bg-secondary);
             padding: 2px 6px;
             border-radius: 3px;
-            color: #e879f9;
+            color: var(--code-color);
         }
 
         .line-assistant pre {
@@ -176,7 +180,7 @@
             padding: 12px;
             margin: 8px 0;
             overflow-x: auto;
-            color: #d4d4d4;
+            color: var(--text-muted);
         }
 
         .line-assistant pre code {
@@ -775,6 +779,10 @@
                         <span class="hint-cmd">/tasks</span>
                         <span class="hint-desc">show all tasks</span>
                     </div>
+                    <div class="hint" data-cmd="/reads">
+                        <span class="hint-cmd">/reads</span>
+                        <span class="hint-desc">show reading list</span>
+                    </div>
                 </div>
                 <span class="prompt">›</span>
                 <input type="text" class="input" id="input" placeholder="Type a message..." autofocus>
@@ -970,6 +978,24 @@
                     tasks.forEach(t => {
                         const status = { pending: '○', in_progress: '◐', done: '●' }[t.status] || '○';
                         summary += `${status} #${t.id || '?'} ${t.title || 'Untitled'}\n`;
+                    });
+                }
+                addLine('assistant', summary.trim());
+                input.value = '';
+                return;
+            }
+
+            if (text === '/reads') {
+                const unread = reads.filter(r => r.status === 'unread').length;
+                const reading = reads.filter(r => r.status === 'reading').length;
+                const done = reads.filter(r => r.status === 'read').length;
+                let summary = `**Reading List:** ${unread} unread, ${reading} reading, ${done} read\n\n`;
+                if (reads.length === 0) {
+                    summary += 'No papers or books yet.';
+                } else {
+                    reads.forEach(r => {
+                        const status = { unread: '○', reading: '◐', read: '●' }[r.status] || '○';
+                        summary += `${status} #${r.id || '?'} ${r.title || 'Untitled'}\n`;
                     });
                 }
                 addLine('assistant', summary.trim());
@@ -1338,14 +1364,6 @@
             const item = e.target.closest('.read-item[data-url]');
             if (item) window.open(item.dataset.url, '_blank');
         });
-
-        function getDomain(url) {
-            try {
-                return new URL(url).hostname.replace('www.', '');
-            } catch {
-                return url;
-            }
-        }
 
         // Hide hints when clicking outside
         document.addEventListener('click', e => {
