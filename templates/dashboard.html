@@ -640,11 +640,16 @@
             border-radius: 6px;
             padding: 10px 12px;
             margin-bottom: 6px;
-            cursor: pointer;
             transition: all 0.1s;
         }
 
-        .read-item:hover { background: var(--bg-tertiary); }
+        .read-item.has-link { cursor: pointer; }
+        .read-item.has-link:hover { background: var(--bg-tertiary); }
+        .read-item.has-link .read-title::after {
+            content: ' ↗';
+            font-size: 10px;
+            opacity: 0.5;
+        }
 
         .read-item.reading { border-left: 3px solid var(--progress); }
         .read-item.read { border-left: 3px solid var(--done); }
@@ -1302,13 +1307,12 @@
                 const url = read.url || '';
 
                 return `
-                <div class="read-item ${status}" data-id="${read.id}" ${url ? `onclick="window.open('${escapeHtml(url)}', '_blank')"` : ''}>
+                <div class="read-item ${status} ${url ? 'has-link' : ''}" data-id="${read.id}" ${url ? `onclick="window.open('${escapeHtml(url)}', '_blank')"` : ''}>
                     <div class="read-title">${escapeHtml(title)}</div>
                     <div class="read-meta">
                         ${author ? `${escapeHtml(author)} · ` : ''}#${read.id} · ${formatDate(read.created_at)}
                         <span class="read-status ${status}">${status}</span>
                     </div>
-                    ${url ? `<span class="read-link">${getDomain(url)}</span>` : ''}
                 </div>`;
             }).join('');
         }
