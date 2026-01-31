@@ -1,18 +1,18 @@
+from __future__ import annotations
+
 import os
-import re
 import sqlite3
 import secrets
 import smtplib
 import json
-import requests
+import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, request, jsonify, render_template, redirect, session, url_for, g
-from werkzeug.security import generate_password_hash
-import hashlib
-import base64
+from typing import Any, Protocol
+
+from flask import Flask, request, jsonify, render_template, redirect, session, url_for
 from dotenv import load_dotenv
 
 # Google GenAI imports for Gemini Chats API
@@ -20,14 +20,18 @@ from google import genai
 from google.genai import types
 
 # Google Calendar imports (optional - graceful fallback if not installed)
+_google_calendar_available = False
 try:
     from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    GOOGLE_CALENDAR_AVAILABLE = True
+    from googleapiclient.discovery import build  # pyright: ignore[reportMissingImports]
+    _google_calendar_available = True
 except ImportError:
-    GOOGLE_CALENDAR_AVAILABLE = False
+    service_account = None  # type: ignore[assignment]
+    build = None  # type: ignore[assignment]
 
-load_dotenv()
+GOOGLE_CALENDAR_AVAILABLE: bool = _google_calendar_available
+
+_ = load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -148,10 +152,10 @@ def get_task_tools():
             name="add_task",
             description="Add a new task to my list",
             parameters=types.Schema(
-                type="OBJECT",
+                type=types.Type.OBJECT,
                 properties={
-                    "title": types.Schema(type="STRING", description="Task title"),
-                    "description": types.Schema(type="STRING", description="Optional details")
+                    "title": types.Schema(type=types.Type.STRING, description="Task title"),
+                    "description": types.Schema(type=types.Type.STRING, description="Optional details")
                 },
                 required=["title"]
             )
@@ -160,12 +164,12 @@ def get_task_tools():
             name="update_task",
             description="Update a task's title, description, or status",
             parameters=types.Schema(
-                type="OBJECT",
+                type=types.Type.OBJECT,
                 properties={
-                    "id": types.Schema(type="INTEGER", description="Task ID"),
-                    "title": types.Schema(type="STRING"),
-                    "description": types.Schema(type="STRING"),
-                    "status": types.Schema(type="STRING", enum=["pending", "in_progress", "done"])
+                    "id": types.Schema(type=types.Type.INTEGER, description="Task ID"),
+                    "title": types.Schema(type=types.Type.STRING),
+                    "description": types.Schema(type=types.Type.STRING),
+                    "status": types.Schema(type=types.Type.STRING, enum=["pending", "in_progress", "done"])
                 },
                 required=["id"]
             )
@@ -174,9 +178,9 @@ def get_task_tools():
             name="delete_task",
             description="Delete a task permanently",
             parameters=types.Schema(
-                type="OBJECT",
+                type=types.Type.OBJECT,
                 properties={
-                    "id": types.Schema(type="INTEGER", description="Task ID")
+                    "id": types.Schema(type=types.Type.INTEGER, description="Task ID")
                 },
                 required=["id"]
             )
@@ -185,9 +189,9 @@ def get_task_tools():
             name="mark_task_done",
             description="Mark a task as completed",
             parameters=types.Schema(
-                type="OBJECT",
+                type=types.Type.OBJECT,
                 properties={
-                    "id": types.Schema(type="INTEGER", description="Task ID")
+                    "id": types.Schema(type=types.Type.INTEGER, description="Task ID")
                 },
                 required=["id"]
             )
@@ -196,10 +200,10 @@ def get_task_tools():
             name="ask_clarification",
             description="Ask the user a clarifying question before proceeding. Use when request is ambiguous or you need more context. Don't overuse.",
             parameters=types.Schema(
-                type="OBJECT",
+                type=types.Type.OBJECT,
                 properties={
-                    "question": types.Schema(type="STRING", description="The clarifying question to ask"),
-                    "context": types.Schema(type="STRING", description="Brief context for why you're asking")
+                    "question": types.Schema(type=types.Type.STRING, description="The clarifying question to ask"),
+                    "context": types.Schema(type=types.Type.STRING, description="Brief context for why you're asking")
                 },
                 required=["question"]
             )
@@ -208,11 +212,13 @@ def get_task_tools():
 
 
 
-def task_to_dict(task):
+def task_to_dict(task: RowLike) -> dict[str, Any]:
     """Convert task row to dict, handling both SQLite and PostgreSQL rows"""
-    return dict(task._data) if hasattr(task, '_data') else dict(task)
+    if isinstance(task, PgRowWrapper):
+        return dict(task._data)
+    return {k: task[k] for k in task.keys()}
 
-def execute_function_call(func_call, conn, user_email):
+def execute_function_call(func_call: dict[str, Any], conn: Any, user_email: str) -> dict[str, Any]:
     """Execute a Gemini function call and return result"""
     try:
         name = func_call.get('name')
@@ -238,7 +244,10 @@ def execute_function_call(func_call, conn, user_email):
                 task_id = cursor.lastrowid
             conn.commit()
             cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-            return {'type': 'added', 'task': task_to_dict(fetchone(cursor))}
+            new_task = fetchone(cursor)
+            if new_task is None:
+                return {'type': 'error', 'message': 'Failed to retrieve created task'}
+            return {'type': 'added', 'task': task_to_dict(new_task)}
 
         elif name == 'update_task':
             task_id = args.get('id')
@@ -256,7 +265,10 @@ def execute_function_call(func_call, conn, user_email):
                  args.get('status', task['status']), datetime.now(), task_id))
             conn.commit()
             cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-            return {'type': 'updated', 'task': task_to_dict(fetchone(cursor))}
+            updated_task = fetchone(cursor)
+            if updated_task is None:
+                return {'type': 'error', 'message': 'Failed to retrieve updated task'}
+            return {'type': 'updated', 'task': task_to_dict(updated_task)}
 
         elif name == 'delete_task':
             task_id = args.get('id')
@@ -287,7 +299,10 @@ def execute_function_call(func_call, conn, user_email):
                           ('done', datetime.now(), task_id))
             conn.commit()
             cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-            return {'type': 'done', 'task': task_to_dict(fetchone(cursor))}
+            done_task = fetchone(cursor)
+            if done_task is None:
+                return {'type': 'error', 'message': 'Failed to retrieve completed task'}
+            return {'type': 'done', 'task': task_to_dict(done_task)}
 
         elif name == 'ask_clarification':
             # No DB action - clarification is in the AI's text response
@@ -299,9 +314,9 @@ def execute_function_call(func_call, conn, user_email):
         return {'type': 'error', 'message': f'Function execution failed: {str(e)}'}
 
 
-def get_calendar_events():
+def get_calendar_events() -> list[dict[str, Any]]:
     """Fetch events from Google Calendar for next 5 days"""
-    if not GOOGLE_CALENDAR_AVAILABLE:
+    if not GOOGLE_CALENDAR_AVAILABLE or service_account is None or build is None:
         return []
 
     creds_b64 = os.environ.get('GOOGLE_CALENDAR_CREDENTIALS')
@@ -313,7 +328,7 @@ def get_calendar_events():
         creds = service_account.Credentials.from_service_account_info(
             creds_json, scopes=['https://www.googleapis.com/auth/calendar.readonly']
         )
-        service = build('calendar', 'v3', credentials=creds)
+        service = build('calendar', 'v3', credentials=creds)  # type: ignore[misc]
 
         now = datetime.utcnow()
         time_min = now.isoformat() + 'Z'
@@ -343,21 +358,27 @@ def get_calendar_events():
         return []
 
 
+class RowLike(Protocol):
+    """Protocol for dict-like row access"""
+    def __getitem__(self, key: str) -> Any: ...
+    def keys(self) -> Any: ...
+
+
 class PgRowWrapper:
     """Wrapper to make psycopg2 rows dict-accessible like sqlite3.Row"""
-    def __init__(self, row, columns):
-        self._data = dict(zip(columns, row))
+    def __init__(self, row: tuple[Any, ...], columns: list[str]) -> None:
+        self._data: dict[str, Any] = dict(zip(columns, row))
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Any:
         return self._data[key]
 
-    def keys(self):
+    def keys(self) -> Any:
         return self._data.keys()
 
 
-def get_db():
+def get_db() -> Any:
     if USE_CLOUD_SQL:
-        import psycopg2
+        import psycopg2  # pyright: ignore[reportMissingModuleSource]
         # Cloud Run provides Unix socket at /cloudsql/CONNECTION_NAME
         conn = psycopg2.connect(
             host=f'/cloudsql/{CLOUD_SQL_CONNECTION}',
@@ -372,7 +393,7 @@ def get_db():
         return conn
 
 
-def execute_query(conn, query, params=None):
+def execute_query(conn: Any, query: str, params: tuple[Any, ...] | None = None) -> Any:
     """Execute query with proper placeholder handling for both SQLite and PostgreSQL"""
     if USE_CLOUD_SQL:
         # Convert ? placeholders to %s for PostgreSQL
@@ -385,24 +406,24 @@ def execute_query(conn, query, params=None):
     return cursor
 
 
-def fetchone(cursor):
+def fetchone(cursor: Any) -> RowLike | None:
     """Fetch one row with proper dict-like access"""
     row = cursor.fetchone()
     if row is None:
         return None
     if USE_CLOUD_SQL:
-        columns = [desc[0] for desc in cursor.description]
+        columns: list[str] = [desc[0] for desc in cursor.description]
         return PgRowWrapper(row, columns)
-    return row
+    return row  # type: ignore[return-value]
 
 
-def fetchall(cursor):
+def fetchall(cursor: Any) -> list[RowLike]:
     """Fetch all rows with proper dict-like access"""
     rows = cursor.fetchall()
     if USE_CLOUD_SQL:
-        columns = [desc[0] for desc in cursor.description]
+        columns: list[str] = [desc[0] for desc in cursor.description]
         return [PgRowWrapper(row, columns) for row in rows]
-    return rows
+    return rows  # type: ignore[return-value]
 
 
 def init_db():
@@ -454,13 +475,15 @@ def init_db():
                 ON chat_history(user_email)
             ''')
             conn.commit()
-        except Exception as e:
+        except Exception:
             # Tables already exist or concurrent init - safe to ignore
             conn.rollback()
         finally:
             conn.close()
     else:
-        conn.executescript('''
+        # SQLite path - executescript is available on sqlite3.Connection
+        conn.executescript(  # type: ignore[union-attr]
+            '''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE NOT NULL,
@@ -701,7 +724,9 @@ def create_task():
     conn.commit()
     conn.close()
 
-    return jsonify(dict(task._data) if hasattr(task, '_data') else dict(task)), 201
+    if task is None:
+        return jsonify({'error': 'Task not found'}), 404
+    return jsonify(task_to_dict(task)), 201
 
 
 @app.route('/api/tasks/<int:task_id>', methods=['PUT'])
@@ -731,7 +756,9 @@ def update_task(task_id):
     updated_task = fetchone(cursor)
     conn.close()
 
-    return jsonify(dict(updated_task._data) if hasattr(updated_task, '_data') else dict(updated_task))
+    if updated_task is None:
+        return jsonify({'error': 'Task not found'}), 404
+    return jsonify(task_to_dict(updated_task))
 
 
 @app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
@@ -772,7 +799,7 @@ def get_chat_history():
     )
     messages = fetchall(cursor)
     conn.close()
-    return jsonify([dict(m._data) if hasattr(m, '_data') else dict(m) for m in messages])
+    return jsonify([task_to_dict(m) for m in messages])
 
 
 # Clear current user's chat history only
@@ -796,13 +823,13 @@ def clear_chat():
 @app.route('/api/chat', methods=['POST'])
 @login_required
 def chat():
-    data = request.json
-    user_message = data.get('message', '')
+    data = request.json or {}
+    user_message: str = data.get('message', '')
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
-    user_email = session.get('email', 'Unknown')
+    user_email: str = session.get('email') or 'Unknown'
     conn = get_db()
 
     # Get current tasks (dynamic context - changes frequently)
@@ -849,17 +876,19 @@ def chat():
 
         # Extract text and function calls from response
         ai_response = ""
-        function_calls = []
+        function_calls: list[dict[str, Any]] = []
 
-        for candidate in response.candidates:
-            for part in candidate.content.parts:
-                if hasattr(part, 'text') and part.text:
-                    ai_response += part.text
-                if hasattr(part, 'function_call') and part.function_call:
-                    function_calls.append({
-                        "name": part.function_call.name,
-                        "args": dict(part.function_call.args)
-                    })
+        if response.candidates:
+            for candidate in response.candidates:
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            ai_response += part.text
+                        if hasattr(part, 'function_call') and part.function_call:
+                            function_calls.append({
+                                "name": part.function_call.name,
+                                "args": dict(part.function_call.args) if part.function_call.args else {}
+                            })
 
         # Execute all function calls
         actions_performed = []
