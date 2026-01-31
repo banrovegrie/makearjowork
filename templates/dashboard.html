@@ -1086,13 +1086,17 @@
         const tasksToggle = document.getElementById('tasks-toggle');
         const tasksClose = document.getElementById('tasks-close');
 
+        // Toggle tasks panel (click again to close)
         tasksToggle.addEventListener('click', () => {
-            tasksPanel.classList.add('mobile-visible');
+            tasksPanel.classList.toggle('mobile-visible');
         });
 
         tasksClose.addEventListener('click', () => {
             tasksPanel.classList.remove('mobile-visible');
         });
+
+        // Auto-refresh tasks every 5 seconds for real-time updates
+        setInterval(loadTasks, 5000);
 
     </script>
 </body>
