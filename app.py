@@ -392,15 +392,23 @@ def execute_function_call(func_call: dict[str, Any], conn: Any, user_email: str)
             if not title:
                 return {'type': 'error', 'message': 'Read title is required'}
 
+            # Auto-generate Google Scholar URL if not provided
+            url = args.get('url', '').strip()
+            if not url:
+                search_query = title
+                if args.get('author'):
+                    search_query += ' ' + args.get('author', '')
+                url = f"https://scholar.google.com/scholar?q={urllib.parse.quote(search_query)}"
+
             if USE_CLOUD_SQL:
                 cursor = execute_query(conn,
                     'INSERT INTO reads (title, url, author, notes, added_by) VALUES (?, ?, ?, ?, ?) RETURNING id',
-                    (title, args.get('url', ''), args.get('author', ''), args.get('notes', ''), user_email))
+                    (title, url, args.get('author', ''), args.get('notes', ''), user_email))
                 read_id = cursor.fetchone()[0]
             else:
                 cursor = execute_query(conn,
                     'INSERT INTO reads (title, url, author, notes, added_by) VALUES (?, ?, ?, ?, ?)',
-                    (title, args.get('url', ''), args.get('author', ''), args.get('notes', ''), user_email))
+                    (title, url, args.get('author', ''), args.get('notes', ''), user_email))
                 read_id = cursor.lastrowid
             conn.commit()
             cursor = execute_query(conn, 'SELECT * FROM reads WHERE id = ?', (read_id,))

@@ -1302,13 +1302,13 @@
                 const url = read.url || '';
 
                 return `
-                <div class="read-item ${status}" data-id="${read.id}">
+                <div class="read-item ${status}" data-id="${read.id}" ${url ? `onclick="window.open('${escapeHtml(url)}', '_blank')"` : ''}>
                     <div class="read-title">${escapeHtml(title)}</div>
                     <div class="read-meta">
                         ${author ? `${escapeHtml(author)} · ` : ''}#${read.id} · ${formatDate(read.created_at)}
                         <span class="read-status ${status}">${status}</span>
                     </div>
-                    ${url ? `<a href="${escapeHtml(url)}" class="read-link" target="_blank" onclick="event.stopPropagation()">${getDomain(url)}</a>` : ''}
+                    ${url ? `<span class="read-link">${getDomain(url)}</span>` : ''}
                 </div>`;
             }).join('');
         }
