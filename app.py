@@ -785,13 +785,14 @@ def make_admin():
     return jsonify({'success': True})
 
 
-@app.route('/api/admin/bootstrap', methods=['POST'])
+@app.route('/api/admin/bootstrap/<token>', methods=['POST'])
 @login_required
-def bootstrap_admin():
-    """One-time bootstrap: first arjo@ user becomes admin"""
+def bootstrap_admin(token):
+    """One-time bootstrap: requires secret token from environment"""
+    bootstrap_token = os.environ.get('ADMIN_BOOTSTRAP_TOKEN', '')
+    if not bootstrap_token or token != bootstrap_token:
+        return jsonify({'error': 'Invalid token'}), 403
     email = session.get('email', '')
-    if not email.startswith('arjo@'):
-        return jsonify({'error': 'Only arjo@ can bootstrap'}), 403
     conn = get_db()
     execute_query(conn, 'UPDATE users SET is_admin = 1 WHERE email = ?', (email,))
     conn.commit()
