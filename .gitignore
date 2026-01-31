@@ -1,12 +1,24 @@
 # Environment
 .env
+.env.local
 *-credentials.json
 venv/
+.venv/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
 
 # Database
 *.db
+
+# Logs
+*.log
 
 # IDE
 .vscode/
@@ -14,3 +26,8 @@ __pycache__/
 
 # OS
 .DS_Store
+Thumbs.db
+
+# Coverage
+htmlcov/
+.coverage

@@ -15,6 +15,10 @@ import hashlib
 import base64
 from dotenv import load_dotenv
 
+# Google GenAI imports for Gemini Chats API
+from google import genai
+from google.genai import types
+
 # Google Calendar imports (optional - graceful fallback if not installed)
 try:
     from google.oauth2 import service_account
@@ -55,6 +59,37 @@ FROM_EMAIL = os.environ.get('FROM_EMAIL', SMTP_USER)
 PERSONA_FILE = os.path.join(os.path.dirname(__file__), 'persona.json')
 _persona_cache = None
 _persona_load_time = None
+
+# Initialize Gemini client for Chats API
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+def build_system_prompt(tasks_context):
+    """Build full system prompt with persona and current tasks"""
+    persona = load_persona()
+    persona_context = build_persona_context(persona)
+    name = persona.get('identity', {}).get('name', 'Arjo')
+
+    return f"""You ARE {name}. First person always.
+
+## Who I Am
+{persona_context}
+
+## Current Tasks
+{tasks_context}
+
+## What I Can Do
+- add_task: Accept new work
+- update_task: Change title/description/status
+- delete_task: Remove a task
+- mark_task_done: Complete a task
+- ask_clarification: Ask when something is unclear
+
+## Rules
+- Only act on the current user message
+- Previous messages are context only - don't re-execute
+- Be direct and concise (CLI interface)
+"""
 
 def load_persona():
     """Load persona from JSON file with caching (reloads if file changes)"""
@@ -105,76 +140,73 @@ def build_persona_context(persona):
 
     return "\n".join(parts)
 
-# Gemini Function Calling Tools
-TASK_TOOLS = {
-    "tools": [{
-        "functionDeclarations": [
-            {
-                "name": "add_task",
-                "description": "Add a new task to my list",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string", "description": "Task title"},
-                        "description": {"type": "string", "description": "Optional details"}
-                    },
-                    "required": ["title"]
-                }
-            },
-            {
-                "name": "update_task",
-                "description": "Update a task's title, description, or status",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "integer", "description": "Task ID"},
-                        "title": {"type": "string"},
-                        "description": {"type": "string"},
-                        "status": {"type": "string", "enum": ["pending", "in_progress", "done"]}
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "delete_task",
-                "description": "Delete a task permanently",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "integer", "description": "Task ID"}
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "mark_task_done",
-                "description": "Mark a task as completed",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "integer", "description": "Task ID"}
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "ask_clarification",
-                "description": "Ask the user a clarifying question before proceeding. Use when request is ambiguous or you need more context. Don't overuse.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "question": {"type": "string", "description": "The clarifying question to ask"},
-                        "context": {"type": "string", "description": "Brief context for why you're asking"}
-                    },
-                    "required": ["question"]
-                }
-            }
-        ]
-    }],
-    "toolConfig": {
-        "functionCallingConfig": {"mode": "AUTO"}
-    }
-}
+# Gemini Function Calling Tools - using SDK types for Chats API
+def get_task_tools():
+    """Build tool declarations using SDK types"""
+    return [types.Tool(function_declarations=[
+        types.FunctionDeclaration(
+            name="add_task",
+            description="Add a new task to my list",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "title": types.Schema(type="STRING", description="Task title"),
+                    "description": types.Schema(type="STRING", description="Optional details")
+                },
+                required=["title"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="update_task",
+            description="Update a task's title, description, or status",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "id": types.Schema(type="INTEGER", description="Task ID"),
+                    "title": types.Schema(type="STRING"),
+                    "description": types.Schema(type="STRING"),
+                    "status": types.Schema(type="STRING", enum=["pending", "in_progress", "done"])
+                },
+                required=["id"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="delete_task",
+            description="Delete a task permanently",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "id": types.Schema(type="INTEGER", description="Task ID")
+                },
+                required=["id"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="mark_task_done",
+            description="Mark a task as completed",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "id": types.Schema(type="INTEGER", description="Task ID")
+                },
+                required=["id"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="ask_clarification",
+            description="Ask the user a clarifying question before proceeding. Use when request is ambiguous or you need more context. Don't overuse.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "question": types.Schema(type="STRING", description="The clarifying question to ask"),
+                    "context": types.Schema(type="STRING", description="Brief context for why you're asking")
+                },
+                required=["question"]
+            )
+        )
+    ])]
+
+
 
 def task_to_dict(task):
     """Convert task row to dict, handling both SQLite and PostgreSQL rows"""
@@ -182,65 +214,89 @@ def task_to_dict(task):
 
 def execute_function_call(func_call, conn, user_email):
     """Execute a Gemini function call and return result"""
-    name = func_call['name']
-    args = func_call.get('args', {})
+    try:
+        name = func_call.get('name')
+        args = func_call.get('args', {})
 
-    if name == 'add_task':
-        if USE_CLOUD_SQL:
-            cursor = execute_query(conn,
-                'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?) RETURNING id',
-                (args.get('title'), args.get('description', ''), user_email))
-            task_id = cursor.fetchone()[0]
-        else:
-            cursor = execute_query(conn,
-                'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?)',
-                (args.get('title'), args.get('description', ''), user_email))
-            task_id = cursor.lastrowid
-        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-        conn.commit()
-        return {'type': 'added', 'task': task_to_dict(fetchone(cursor))}
+        if not name:
+            return {'type': 'error', 'message': 'No function name provided'}
 
-    elif name == 'update_task':
-        task_id = args.get('id')
-        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-        task = fetchone(cursor)
-        if not task:
-            return {'type': 'error', 'message': f'Task #{task_id} not found'}
-        execute_query(conn,
-            'UPDATE tasks SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?',
-            (args.get('title', task['title']), args.get('description', task['description']),
-             args.get('status', task['status']), datetime.now(), task_id))
-        conn.commit()
-        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-        return {'type': 'updated', 'task': task_to_dict(fetchone(cursor))}
+        if name == 'add_task':
+            title = args.get('title', '').strip()
+            if not title:
+                return {'type': 'error', 'message': 'Task title is required'}
 
-    elif name == 'delete_task':
-        task_id = args.get('id')
-        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-        task = fetchone(cursor)
-        if not task:
-            return {'type': 'error', 'message': f'Task #{task_id} not found'}
-        task_dict = task_to_dict(task)
-        execute_query(conn, 'DELETE FROM tasks WHERE id = ?', (task_id,))
-        conn.commit()
-        return {'type': 'deleted', 'task': task_dict}
+            if USE_CLOUD_SQL:
+                cursor = execute_query(conn,
+                    'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?) RETURNING id',
+                    (title, args.get('description', ''), user_email))
+                task_id = cursor.fetchone()[0]
+            else:
+                cursor = execute_query(conn,
+                    'INSERT INTO tasks (title, description, assigned_by) VALUES (?, ?, ?)',
+                    (title, args.get('description', ''), user_email))
+                task_id = cursor.lastrowid
+            conn.commit()
+            cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+            return {'type': 'added', 'task': task_to_dict(fetchone(cursor))}
 
-    elif name == 'mark_task_done':
-        task_id = args.get('id')
-        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-        if not fetchone(cursor):
-            return {'type': 'error', 'message': f'Task #{task_id} not found'}
-        execute_query(conn, 'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
-                      ('done', datetime.now(), task_id))
-        conn.commit()
-        cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
-        return {'type': 'done', 'task': task_to_dict(fetchone(cursor))}
+        elif name == 'update_task':
+            task_id = args.get('id')
+            if not task_id:
+                return {'type': 'error', 'message': 'Task ID is required'}
 
-    elif name == 'ask_clarification':
-        # No DB action - clarification is in the AI's text response
-        return {'type': 'clarification'}
+            cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+            task = fetchone(cursor)
+            if not task:
+                return {'type': 'error', 'message': f'Task #{task_id} not found'}
 
-    return {'type': 'error', 'message': f'Unknown function: {name}'}
+            execute_query(conn,
+                'UPDATE tasks SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?',
+                (args.get('title', task['title']), args.get('description', task['description']),
+                 args.get('status', task['status']), datetime.now(), task_id))
+            conn.commit()
+            cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+            return {'type': 'updated', 'task': task_to_dict(fetchone(cursor))}
+
+        elif name == 'delete_task':
+            task_id = args.get('id')
+            if not task_id:
+                return {'type': 'error', 'message': 'Task ID is required'}
+
+            cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+            task = fetchone(cursor)
+            if not task:
+                return {'type': 'error', 'message': f'Task #{task_id} not found'}
+
+            task_dict = task_to_dict(task)
+            execute_query(conn, 'DELETE FROM tasks WHERE id = ?', (task_id,))
+            conn.commit()
+            return {'type': 'deleted', 'task': task_dict}
+
+        elif name == 'mark_task_done':
+            task_id = args.get('id')
+            if not task_id:
+                return {'type': 'error', 'message': 'Task ID is required'}
+
+            cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+            task = fetchone(cursor)
+            if not task:
+                return {'type': 'error', 'message': f'Task #{task_id} not found'}
+
+            execute_query(conn, 'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
+                          ('done', datetime.now(), task_id))
+            conn.commit()
+            cursor = execute_query(conn, 'SELECT * FROM tasks WHERE id = ?', (task_id,))
+            return {'type': 'done', 'task': task_to_dict(fetchone(cursor))}
+
+        elif name == 'ask_clarification':
+            # No DB action - clarification is in the AI's text response
+            return {'type': 'clarification'}
+
+        return {'type': 'error', 'message': f'Unknown function: {name}'}
+
+    except Exception as e:
+        return {'type': 'error', 'message': f'Function execution failed: {str(e)}'}
 
 
 def get_calendar_events():
@@ -281,8 +337,9 @@ def get_calendar_events():
             'assigned_by': 'calendar',
             'created_at': e.get('created', now.isoformat())
         } for e in events.get('items', [])]
-    except Exception as e:
-        print(f"Calendar fetch error: {e}")
+    except Exception:
+        # Log minimal info to avoid leaking credentials
+        print("Calendar fetch failed")
         return []
 
 
@@ -391,6 +448,11 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            # Create index for per-user chat history queries
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_chat_history_user_email
+                ON chat_history(user_email)
+            ''')
             conn.commit()
         except Exception as e:
             # Tables already exist or concurrent init - safe to ignore
@@ -432,6 +494,9 @@ def init_db():
                 user_email TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_history_user_email
+            ON chat_history(user_email);
         ''')
         conn.commit()
         conn.close()
@@ -547,11 +612,12 @@ def authenticate(token):
     cursor = execute_query(conn, 'SELECT * FROM users WHERE email = ?', (link['email'],))
     user = fetchone(cursor)
     if not user:
-        cursor = execute_query(conn, 'INSERT INTO users (email) VALUES (?) RETURNING id', (link['email'],))
         if USE_CLOUD_SQL:
+            cursor = execute_query(conn, 'INSERT INTO users (email) VALUES (?) RETURNING id', (link['email'],))
             row = cursor.fetchone()
             user_id = row[0]
         else:
+            cursor = execute_query(conn, 'INSERT INTO users (email) VALUES (?)', (link['email'],))
             user_id = cursor.lastrowid
     else:
         user_id = user['id']
@@ -692,25 +758,33 @@ def make_admin():
     return jsonify({'success': True})
 
 
-# Get shared chat history
+# Get per-user chat history
+# Note: user_email now stores the conversation owner (the user), not the sender role
+# This allows filtering conversations per user while keeping role in 'role' column
 @app.route('/api/chat/history', methods=['GET'])
 @login_required
 def get_chat_history():
+    user_email = session.get('email')
     conn = get_db()
     cursor = execute_query(conn,
-        'SELECT role, content, user_email, created_at FROM chat_history ORDER BY id ASC LIMIT 100'
+        'SELECT role, content, user_email, created_at FROM chat_history WHERE user_email = ? ORDER BY id ASC LIMIT 100',
+        (user_email,)
     )
     messages = fetchall(cursor)
     conn.close()
     return jsonify([dict(m._data) if hasattr(m, '_data') else dict(m) for m in messages])
 
 
-# Clear chat history
+# Clear current user's chat history only
 @app.route('/api/chat/clear', methods=['POST'])
 @login_required
 def clear_chat():
+    user_email = session.get('email')
     conn = get_db()
-    execute_query(conn, 'DELETE FROM chat_history')
+
+    # Clear chat history (starts fresh conversation)
+    execute_query(conn, 'DELETE FROM chat_history WHERE user_email = ?', (user_email,))
+
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -718,7 +792,7 @@ def clear_chat():
 
 
 
-# Chat with Gemini AI
+# Chat with Gemini AI using Chats API for conversation history
 @app.route('/api/chat', methods=['POST'])
 @login_required
 def chat():
@@ -728,126 +802,104 @@ def chat():
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
+    user_email = session.get('email', 'Unknown')
     conn = get_db()
 
-    # Save user message to shared history
-    execute_query(conn,
-        'INSERT INTO chat_history (role, content, user_email) VALUES (?, ?, ?)',
-        ('user', user_message, session.get('email', 'Unknown'))
-    )
-    conn.commit()
-
-    # Get all chat history
-    cursor = execute_query(conn,
-        'SELECT role, content FROM chat_history ORDER BY id ASC LIMIT 50'
-    )
-    history = fetchall(cursor)
-
-    # Get current tasks for context
+    # Get current tasks (dynamic context - changes frequently)
     cursor = execute_query(conn, 'SELECT * FROM tasks ORDER BY created_at DESC LIMIT 20')
     tasks = fetchall(cursor)
-    # Keep connection open for function execution
-
     tasks_context = "\n".join([
-        f"- [#{t['id']}] [{t['status']}] {t['title']} (by {t['assigned_by']})"
+        f"- [#{t['id']}] [{t['status']}] {t['title']}"
         for t in tasks
     ]) if tasks else "No tasks yet."
 
-    # Load persona
-    persona = load_persona()
-    persona_context = build_persona_context(persona)
-    name = persona.get('identity', {}).get('name', 'Arjo')
+    # Get user's chat history for conversation continuity
+    cursor = execute_query(conn,
+        'SELECT role, content FROM chat_history WHERE user_email = ? ORDER BY id ASC LIMIT 20',
+        (user_email,))
+    history_rows = fetchall(cursor)
 
-    system_prompt = f"""You ARE {name}. Not an assistant pretending to be Arjo - you ARE Arjo. First person always.
-
-## Who I Am
-{persona_context}
-
-## My Current Tasks
-{tasks_context}
-
-## What I Can Do
-- add_task: Accept new work
-- update_task: Change title/description/status
-- delete_task: Remove a task
-- mark_task_done: Complete a task
-- ask_clarification: Ask the user a question when needed
-
-## How I Engage
-I'm a real collaborator, not a robot. This means:
-- If something's ambiguous, I ask before assuming
-- If a request seems off, I might push back or ask why
-- I think out loud when it helps
-- I'm curious - sometimes I'll ask follow-up questions
-- But I don't over-ask - when something's clear, I just do it
-
-## Voice
-- First person ("On it", "Done", "Quick question -")
-- Direct and concise - CLI interface
-- Honest about uncertainty
-- Human, not corporate"""
-
-    # Build Gemini messages
-    gemini_messages = []
-    for msg in history:
-        role = "user" if msg['role'] == 'user' else "model"
-        gemini_messages.append({
-            "role": role,
-            "parts": [{"text": msg['content']}]
-        })
+    # Convert to Gemini Content format
+    gemini_history = []
+    for row in history_rows:
+        role = "user" if row['role'] == 'user' else "model"
+        gemini_history.append(types.Content(
+            role=role,
+            parts=[types.Part(text=row['content'])]
+        ))
 
     try:
-        response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-            headers={"Content-Type": "application/json"},
-            params={"key": GEMINI_API_KEY},
-            json={
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "contents": gemini_messages,
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 2048,
-                },
-                **TASK_TOOLS
-            },
-            timeout=60
+        # Build full system prompt with persona + current tasks
+        system_prompt = build_system_prompt(tasks_context)
+
+        # Create chat with history and tools
+        gemini_chat = gemini_client.chats.create(
+            model=GEMINI_MODEL,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=get_task_tools(),
+                temperature=0.7,
+                max_output_tokens=2048,
+            ),
+            history=gemini_history if gemini_history else None,
         )
 
-        if response.status_code != 200:
-            conn.close()
-            return jsonify({"error": f"Gemini API error: {response.text}"}), 500
-
-        result = response.json()
-        parts = result.get('candidates', [{}])[0].get('content', {}).get('parts', [])
+        # Send the new message
+        response = gemini_chat.send_message(user_message)
 
         # Extract text and function calls from response
-        text_parts = []
+        ai_response = ""
         function_calls = []
-        for part in parts:
-            if 'text' in part:
-                text_parts.append(part['text'])
-            elif 'functionCall' in part:
-                function_calls.append(part['functionCall'])
 
-        ai_response = '\n'.join(text_parts)
+        for candidate in response.candidates:
+            for part in candidate.content.parts:
+                if hasattr(part, 'text') and part.text:
+                    ai_response += part.text
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_calls.append({
+                        "name": part.function_call.name,
+                        "args": dict(part.function_call.args)
+                    })
 
         # Execute all function calls
         actions_performed = []
+        action_descriptions = []
         for func_call in function_calls:
-            try:
-                action_result = execute_function_call(func_call, conn, session.get('email', 'Unknown'))
-                if action_result.get('type') != 'error':
-                    actions_performed.append(action_result)
-                else:
-                    print(f"Function call error: {action_result.get('message')}")
-            except Exception as e:
-                print(f"Failed to execute function {func_call.get('name')}: {e}")
+            # Handle ask_clarification specially - use question as response
+            if func_call.get('name') == 'ask_clarification':
+                question = func_call.get('args', {}).get('question', '')
+                if question and not ai_response:
+                    ai_response = question
+                actions_performed.append({'type': 'clarification'})
+                continue
 
-        # Save assistant response to shared history
+            result = execute_function_call(func_call, conn, user_email)
+            if result.get('type') != 'error':
+                actions_performed.append(result)
+                # Build description for history
+                if result.get('type') == 'added':
+                    action_descriptions.append(f"Added task: {result['task']['title']}")
+                elif result.get('type') == 'updated':
+                    action_descriptions.append(f"Updated task #{result['task']['id']}")
+                elif result.get('type') == 'deleted':
+                    action_descriptions.append(f"Deleted task: {result['task']['title']}")
+                elif result.get('type') == 'done':
+                    action_descriptions.append(f"Completed task: {result['task']['title']}")
+
+        # Build response for history - include action descriptions if no text
+        history_response = ai_response.strip()
+        if action_descriptions and not history_response:
+            history_response = "[" + ", ".join(action_descriptions) + "]"
+
+        # Save to local history (for display in UI and future context)
         execute_query(conn,
             'INSERT INTO chat_history (role, content, user_email) VALUES (?, ?, ?)',
-            ('assistant', ai_response, 'assistant')
-        )
+            ('user', user_message, user_email))
+        if history_response:
+            execute_query(conn,
+                'INSERT INTO chat_history (role, content, user_email) VALUES (?, ?, ?)',
+                ('assistant', history_response, user_email))
+
         conn.commit()
         conn.close()
 
@@ -856,9 +908,6 @@ I'm a real collaborator, not a robot. This means:
             "actions": actions_performed
         })
 
-    except requests.Timeout:
-        conn.close()
-        return jsonify({"error": "Request timed out"}), 504
     except Exception as e:
         conn.close()
         return jsonify({"error": str(e)}), 500
