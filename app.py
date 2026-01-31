@@ -1094,6 +1094,58 @@ def delete_read(read_id):
     return '', 204
 
 
+# Internal maintenance endpoint - run migrations
+@app.route('/api/internal/migrate/<token>', methods=['POST'])
+def internal_migrate(token):
+    """Create missing tables - requires MAINTENANCE_TOKEN env var"""
+    expected = os.environ.get('MAINTENANCE_TOKEN', '')
+    if not expected or token != expected:
+        return '', 404
+
+    conn = get_db()
+    results = []
+
+    try:
+        if USE_CLOUD_SQL:
+            cursor = conn.cursor()
+            # Check if reads table exists
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = 'reads'
+                );
+            """)
+            exists = cursor.fetchone()[0]
+
+            if not exists:
+                cursor.execute('''
+                    CREATE TABLE reads (
+                        id SERIAL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        url TEXT,
+                        author TEXT,
+                        notes TEXT,
+                        status TEXT DEFAULT 'unread',
+                        added_by TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                conn.commit()
+                results.append('reads table created')
+            else:
+                results.append('reads table already exists')
+        else:
+            results.append('SQLite: tables created on init')
+    except Exception as e:
+        results.append(f'error: {str(e)}')
+        conn.rollback()
+    finally:
+        conn.close()
+
+    return jsonify({'results': results})
+
+
 # Internal maintenance endpoint - requires secret token
 @app.route('/api/internal/clear-all-chats/<token>', methods=['POST'])
 def internal_clear_all_chats(token):
