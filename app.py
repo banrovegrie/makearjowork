@@ -785,6 +785,17 @@ def make_admin():
     return jsonify({'success': True})
 
 
+@app.route('/api/admin/clear-all-chats', methods=['POST'])
+@admin_required
+def clear_all_chats():
+    """Admin endpoint to clear all chat history for all users"""
+    conn = get_db()
+    execute_query(conn, 'DELETE FROM chat_history')
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': 'All chat history cleared'})
+
+
 # Get per-user chat history
 # Note: user_email now stores the conversation owner (the user), not the sender role
 # This allows filtering conversations per user while keeping role in 'role' column
