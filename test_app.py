@@ -6,7 +6,7 @@ import os
 # Set up test environment before importing app
 os.environ['DATABASE'] = ':memory:'
 
-from app import app, init_db, get_db, execute_query, web_search
+from app import app, init_db, get_db, execute_query, add_link
 
 
 @pytest.fixture
@@ -151,21 +151,21 @@ class TestReadsAPI:
         assert resp.json[0]['title'] == 'Reading Paper'
 
 
-class TestWebSearch:
-    """Test the web search function."""
+class TestAddLink:
+    """Test the add_link function."""
 
-    def test_web_search_returns_result(self):
-        """web_search returns URL and title."""
-        result = web_search('A Path to Autonomous Machine Intelligence')
+    def test_add_link_returns_result(self):
+        """add_link returns URL and title."""
+        result = add_link('A Path to Autonomous Machine Intelligence')
 
         # Should return a dict with url, title
         assert 'url' in result
         assert 'title' in result
 
-    def test_web_search_handles_any_query(self):
-        """web_search always returns a result (fallback to Google Scholar)."""
-        result = web_search('some random query xyz')
-        # Always returns a result (worst case: Google Scholar link)
+    def test_add_link_handles_any_query(self):
+        """add_link always returns a result (fallback to Google search)."""
+        result = add_link('some random query xyz')
+        # Always returns a result (worst case: Google link)
         assert 'url' in result
         assert 'title' in result
 

@@ -5,7 +5,7 @@ import os
 
 os.environ['DATABASE'] = ':memory:'
 
-from app import app, init_db, get_db, execute_query, web_search
+from app import app, init_db, get_db, execute_query, add_link
 
 
 @pytest.fixture
@@ -122,19 +122,19 @@ class TestFullWorkflow:
         assert len(resp.json) == 0
 
 
-class TestWebSearchIntegration:
-    """Test web search integration."""
+class TestAddLinkIntegration:
+    """Test add_link integration."""
 
-    def test_web_search_paper(self):
-        """Test web search for a paper."""
-        result = web_search('A Path to Autonomous Machine Intelligence Yann LeCun')
+    def test_add_link_paper(self):
+        """Test add_link for a paper."""
+        result = add_link('A Path to Autonomous Machine Intelligence Yann LeCun')
 
         assert 'url' in result
         assert 'title' in result
 
-    def test_web_search_always_returns_url(self):
-        """Web search always returns a URL (fallback to Google Scholar)."""
-        result = web_search('some obscure query that wont match anything')
+    def test_add_link_always_returns_url(self):
+        """add_link always returns a URL (fallback to Google search)."""
+        result = add_link('some obscure query that wont match anything')
 
         assert 'url' in result
         assert 'title' in result
